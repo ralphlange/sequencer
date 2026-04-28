@@ -1,5 +1,4 @@
-/*************************************************************************\
-Copyright (c) 2002      The Regents of the University of California, as
+/*************************************************************************Copyright (c) 2002      The Regents of the University of California, as
                         Operator of Los Alamos National Laboratory.
 Copyright (c) 2008      UChicago Argonne LLC, as Operator of Argonne
                         National Laboratory.
@@ -35,30 +34,38 @@ static void check(QUEUE q, size_t expectedFree)
 
 static epicsEventId wdone, rdone, ready;
 
-static const int threadTestIterations = 1000000;
+static const int threadTestIterations = 2000000;
 static const size_t threadTestMaxNumElems = 20;
 
-static int readerLost, writerLost;
+static volatile int readerLost, writerLost;
+
+typedef struct {
+    int seq;
+    int inv_seq;
+} THREAD_ELEM;
 
 static void readerTask(void *arg)
 {
     QUEUE q = (QUEUE)arg;
-    string data;
+    THREAD_ELEM elem;
     boolean empty;
     int i, j;
 
     for (i = 0; i < threadTestIterations; i++) {
         do {
-            empty = seqQueueGet(q, data);
+            empty = seqQueueGet(q, &elem);
         } while (empty);
-        j = atoi(data);
-        if (j<i) {
-            testAbort("%d<=%d", i, j);
+        j = elem.seq;
+        if (j != ~elem.inv_seq) {
+            testAbort("Data corruption detected: seq=%d, inv_seq=%d (at i=%d)", j, elem.inv_seq, i);
         }
-        if (j>threadTestIterations) {
-            testAbort("%d<=%d", j, threadTestIterations);
+        if (j < i) {
+            testAbort("Sequence error: received %d, expected >= %d", j, i);
         }
-        readerLost+=(j-i);
+        if (j >= threadTestIterations) {
+            testAbort("Sequence error: received %d, expected < %d", j, threadTestIterations);
+        }
+        readerLost += (j - i);
         i = j;
     }
     epicsEventWait(wdone);
@@ -68,13 +75,14 @@ static void readerTask(void *arg)
 static void writerTask(void *arg)
 {
     QUEUE q = (QUEUE)arg;
-    string data;
+    THREAD_ELEM elem;
     boolean full;
     int i;
 
     for (i = 0; i < threadTestIterations; i++) {
-        sprintf(data, "%d", i);
-        full = seqQueuePut(q, data);
+        elem.seq = i;
+        elem.inv_seq = ~i;
+        full = seqQueuePut(q, &elem);
         if (full) writerLost++;
     }
     epicsEventSignal(wdone);
@@ -142,7 +150,7 @@ MAIN(queueTest)
 
         testDiag("concurrent queueTest with numElems=%u", (unsigned)numElems);
 
-        q = seqQueueCreate(numElems, sizeof(string));
+        q = seqQueueCreate(numElems, sizeof(THREAD_ELEM));
         wdone = epicsEventCreate(epicsEventEmpty);
         rdone = epicsEventCreate(epicsEventEmpty);
         ready = epicsEventCreate(epicsEventEmpty);

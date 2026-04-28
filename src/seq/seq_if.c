@@ -1,5 +1,4 @@
-/*************************************************************************\
-Copyright (c) 1991-1994 The Regents of the University of California
+/*************************************************************************Copyright (c) 1991-1994 The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
 Copyright (c) 2010-2015 Helmholtz-Zentrum Berlin f. Materialien
@@ -381,7 +380,7 @@ static void *putq_cp(void *dest, const void *src, size_t elemSize)
 	struct putq_cp_arg *arg = (struct putq_cp_arg *)src;
 	CHAN *ch = arg->ch;
 
-	return memcpy(pv_value_ptr(dest, ch->type->getType), /*BUG? should that be putType?*/
+	return memcpy(pv_value_ptr(dest, ch->type->putType),
 		arg->var, ch->type->size * ch->count);
 }
 
@@ -392,7 +391,7 @@ static void anonymous_put(SS_ID ss, CHAN *ch)
 	if (ch->queue)
 	{
 		QUEUE queue = ch->queue;
-		pvType type = ch->type->getType; /*BUG? should that be putType?*/
+		pvType type = ch->type->putType;
 		size_t size = ch->type->size;
 		boolean full;
 		struct putq_cp_arg arg = {ch, var};

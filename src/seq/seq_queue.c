@@ -1,11 +1,11 @@
-/*************************************************************************\
-Copyright (c) 2010-2015 Helmholtz-Zentrum Berlin f. Materialien
+/*************************************************************************Copyright (c) 2010-2015 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
 \*************************************************************************/
 #include "seq.h"
 #include "seq_debug.h"
+#include "epicsAtomic.h"
 
 struct seqQueue {
     size_t          wr;
@@ -23,8 +23,8 @@ epicsShareFunc boolean seqQueueInvariant(QUEUE q)
         && q->elemSize > 0
         && q->numElems > 0
         && q->numElems <= seqQueueMaxNumElems
-        && q->rd < q->numElems
-        && q->wr < q->numElems;
+        && epicsAtomicGetSizeT(&q->rd) < q->numElems
+        && epicsAtomicGetSizeT(&q->wr) < q->numElems;
 }
 
 epicsShareFunc QUEUE seqQueueCreate(size_t numElems, size_t elemSize)
@@ -86,21 +86,28 @@ epicsShareFunc boolean seqQueueGet(QUEUE q, void *value)
 
 epicsShareFunc boolean seqQueueGetF(QUEUE q, seqQueueFunc *get, void *arg)
 {
-    if (q->wr == q->rd) {
+    size_t rd = epicsAtomicGetSizeT(&q->rd);
+    size_t wr = epicsAtomicGetSizeT(&q->wr);
+
+    if (wr == rd) {
         if (!q->overflow) {
             return TRUE;
         }
         epicsMutexLock(q->mutex);
-        get(arg, q->buffer + q->rd * q->elemSize, q->elemSize);
+        rd = epicsAtomicGetSizeT(&q->rd);
+        wr = epicsAtomicGetSizeT(&q->wr);
+        get(arg, q->buffer + rd * q->elemSize, q->elemSize);
         /* check again, a put might have intervened */
-        if (q->wr == q->rd && q->overflow)
+        if (wr == rd && q->overflow) {
             q->overflow = FALSE;
-        else
-            q->rd = (q->rd + 1) % q->numElems;
+        } else {
+            epicsAtomicSetSizeT(&q->rd, (rd + 1) % q->numElems);
+        }
         epicsMutexUnlock(q->mutex);
     } else {
-        get(arg, q->buffer + q->rd * q->elemSize, q->elemSize);
-        q->rd = (q->rd + 1) % q->numElems;
+        epicsAtomicReadMemoryBarrier();
+        get(arg, q->buffer + rd * q->elemSize, q->elemSize);
+        epicsAtomicSetSizeT(&q->rd, (rd + 1) % q->numElems);
     }
     return FALSE;
 }
@@ -113,10 +120,14 @@ epicsShareFunc boolean seqQueuePut(QUEUE q, const void *value)
 epicsShareFunc boolean seqQueuePutF(QUEUE q, seqQueueFunc *put, const void *arg)
 {
     boolean r = FALSE;
+    size_t rd = epicsAtomicGetSizeT(&q->rd);
+    size_t wr = epicsAtomicGetSizeT(&q->wr);
 
-    if (q->overflow || (q->wr + 1) % q->numElems == q->rd) {
+    if (q->overflow || (wr + 1) % q->numElems == rd) {
         epicsMutexLock(q->mutex);
-        if ((q->wr + 1) % q->numElems == q->rd) {
+        rd = epicsAtomicGetSizeT(&q->rd);
+        wr = epicsAtomicGetSizeT(&q->wr);
+        if ((wr + 1) % q->numElems == rd) {
             if (q->overflow) {
                 r = TRUE;   /* we will overwrite the last element */
             }
@@ -125,19 +136,22 @@ epicsShareFunc boolean seqQueuePutF(QUEUE q, seqQueueFunc *put, const void *arg)
             /* we had a get since the last put, so
                can now eliminate overflow flag and instead
                increment the write pointer */
-            q->wr = (q->wr + 1) % q->numElems;
-            if ((q->wr + 1) % q->numElems != q->rd) {
+            wr = (wr + 1) % q->numElems;
+            epicsAtomicSetSizeT(&q->wr, wr);
+            if ((wr + 1) % q->numElems != rd) {
                 q->overflow = FALSE;
             }
         }
-        put(q->buffer + q->wr * q->elemSize, arg, q->elemSize);
+        put(q->buffer + wr * q->elemSize, arg, q->elemSize);
         if (!q->overflow) {
-            q->wr = (q->wr + 1) % q->numElems;
+            epicsAtomicWriteMemoryBarrier();
+            epicsAtomicSetSizeT(&q->wr, (wr + 1) % q->numElems);
         }
         epicsMutexUnlock(q->mutex);
     } else {
-        put(q->buffer + q->wr * q->elemSize, arg, q->elemSize);
-        q->wr = (q->wr + 1) % q->numElems;
+        put(q->buffer + wr * q->elemSize, arg, q->elemSize);
+        epicsAtomicWriteMemoryBarrier();
+        epicsAtomicSetSizeT(&q->wr, (wr + 1) % q->numElems);
     }
     return r;
 }
@@ -145,14 +159,16 @@ epicsShareFunc boolean seqQueuePutF(QUEUE q, seqQueueFunc *put, const void *arg)
 epicsShareFunc void seqQueueFlush(QUEUE q)
 {
     epicsMutexLock(q->mutex);
-    q->rd = q->wr;
+    epicsAtomicSetSizeT(&q->rd, epicsAtomicGetSizeT(&q->wr));
     q->overflow = FALSE;
     epicsMutexUnlock(q->mutex);
 }
 
 static size_t used(const QUEUE q)
 {
-    return (q->numElems + q->wr - q->rd) % q->numElems + (q->overflow ? 1 : 0);
+    size_t rd = epicsAtomicGetSizeT(&q->rd);
+    size_t wr = epicsAtomicGetSizeT(&q->wr);
+    return (q->numElems + wr - rd) % q->numElems + (q->overflow ? 1 : 0);
 }
 
 epicsShareFunc size_t seqQueueFree(const QUEUE q)
@@ -167,12 +183,16 @@ epicsShareFunc size_t seqQueueUsed(const QUEUE q)
 
 epicsShareFunc boolean seqQueueIsEmpty(const QUEUE q)
 {
-    return q->wr == q->rd && !q->overflow;
+    size_t rd = epicsAtomicGetSizeT(&q->rd);
+    size_t wr = epicsAtomicGetSizeT(&q->wr);
+    return wr == rd && !q->overflow;
 }
 
 epicsShareFunc boolean seqQueueIsFull(const QUEUE q)
 {
-    return (q->wr + 1) % q->numElems == q->rd && q->overflow;
+    size_t rd = epicsAtomicGetSizeT(&q->rd);
+    size_t wr = epicsAtomicGetSizeT(&q->wr);
+    return (wr + 1) % q->numElems == rd && q->overflow;
 }
 
 epicsShareFunc size_t seqQueueNumElems(const QUEUE q)
