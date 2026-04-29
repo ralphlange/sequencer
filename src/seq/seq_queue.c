@@ -11,7 +11,14 @@ in the file LICENSE that is included with this distribution.
 /*
  * Use epicsAtomic if available (EPICS >= 3.15)
  */
-#if defined(EPICS_VERSION_INT) && EPICS_VERSION_INT >= VERSION_INT(3,15,0,0)
+#ifndef VERSION_INT
+#  define VERSION_INT(V,R,M,P) ( ((V)<<24) | ((R)<<16) | ((M)<<8) | (P))
+#endif
+#ifndef EPICS_VERSION_INT
+#  define EPICS_VERSION_INT VERSION_INT(EPICS_VERSION, EPICS_REVISION, EPICS_MODIFICATION, EPICS_PATCH_LEVEL)
+#endif
+
+#if EPICS_VERSION_INT >= VERSION_INT(3,15,0,0)
 #include "epicsAtomic.h"
 #define HAS_ATOMICS
 #endif
