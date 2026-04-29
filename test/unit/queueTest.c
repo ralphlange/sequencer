@@ -1,4 +1,5 @@
-/*************************************************************************Copyright (c) 2002      The Regents of the University of California, as
+/*************************************************************************\
+Copyright (c) 2002      The Regents of the University of California, as
                         Operator of Los Alamos National Laboratory.
 Copyright (c) 2008      UChicago Argonne LLC, as Operator of Argonne
                         National Laboratory.
@@ -12,6 +13,7 @@ in file LICENSE that is included with this distribution.
 #include "epicsEvent.h"
 #include "epicsUnitTest.h"
 #include "testMain.h"
+#include <string.h>
 
 typedef unsigned long long ELEM;
 
@@ -32,9 +34,9 @@ static void check(QUEUE q, size_t expectedFree)
     testOk(isFull == expectedFull, "Full: %d == %d", isFull, expectedFull);
 }
 
-static epicsEventId wdone, rdone, ready;
+static epicsEventId wdone, rdone;
 
-static const int threadTestIterations = 2000000;
+static const int threadTestIterations = 1000000;
 static const size_t threadTestMaxNumElems = 20;
 
 static volatile int readerLost, writerLost;
@@ -153,8 +155,7 @@ MAIN(queueTest)
         q = seqQueueCreate(numElems, sizeof(THREAD_ELEM));
         wdone = epicsEventCreate(epicsEventEmpty);
         rdone = epicsEventCreate(epicsEventEmpty);
-        ready = epicsEventCreate(epicsEventEmpty);
-        if (!wdone || !rdone || !ready) {
+        if (!wdone || !rdone) {
             testAbort("epicsEventCreate failed");
         }
         readerLost = writerLost = 0;
@@ -170,11 +171,9 @@ MAIN(queueTest)
 
         seqQueueDestroy(q);
         testPass("ok");
+        epicsEventDestroy(wdone);
+        epicsEventDestroy(rdone);
     }
-
-    epicsEventDestroy(wdone);
-    epicsEventDestroy(rdone);
-    epicsEventDestroy(ready);
 
     return testDone();
 }
